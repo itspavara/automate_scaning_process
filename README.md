@@ -12,6 +12,7 @@ As first usage ./recon.sh -I <IP>/<URL> use for gather information about target 
 
 
 In second  ./recon.sh -v <IP>/<URL> this use for vulnerability scaning in this I use nmap and vulners.nsa  script for scan vulnerabilities
+
 ![image](https://github.com/itspavara/automate_scaning_process/assets/111744737/e8aede21-d50c-49e3-a656-ce7b956274bf)
 
  
