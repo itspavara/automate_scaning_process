@@ -1,102 +1,100 @@
 #!/bin/bash
 
+# Function to check if a tool is installed
+check_tool() {
+    tool=$1
+    if ! command -v $tool &> /dev/null; then
+        echo "[!] $tool is not installed. Please install it manually."
+        missing_tools=1
+    else
+        echo "[*] $tool is already installed."
+    fi
+}
 
-#check the file exist
-if [ ! -d results ]; then
-  mkdir results
+# Check for all required tools
+missing_tools=0
+echo "[*] Checking required tools..."
+check_tool "amass"
+check_tool "sublist3r"
+check_tool "subfinder"
+check_tool "httx"
+check_tool "masscan"
+check_tool "naabu"
+check_tool "whatweb"
+check_tool "wappalyzer"
+check_tool "nikto"
+check_tool "nuclei"
+check_tool "eyewitness"
+
+# Exit if any tools are missing
+if [ $missing_tools -ne 0 ]; then
+    echo "[!] One or more tools are missing. Please install them and rerun the script."
+    exit 1
 fi
 
-if [ -z "$1" ]
-then
-	echo "Usage: ./recon.sh -i <IP>/<URL> for information gatharing"
-	echo "Usage: ./recon.sh -v <IP>/<URL> for vulnerabilities"
-	echo "Usage: ./recon.sh -f <IP> <SOURCE_DIR> <DEST_DIR> for send file to target ip address"
-	echo "Usage: ./recon.sh -p <IP> <NUM_OF_PACKETS> for send packets to target ip address"
-	exit 1
-
- 
-elif [ $1 == "-i" ]; then
-
-	TARGET_IP="$2"
-
-	echo "Running Nmap..."
-	nmap $TARGET_IP | tail -n +5 | head -n -3 >> results/nmap
-
-
-#scan for web ports
-while read line
-	do
-		if [[ $line == *open* ]] && [[ $line == *http* ]]
-		then
-		echo "Running WhatWheb..."
-		whatweb $TARGET_IP -v > temp
-	fi
-	done < results/nmap
-
-	#gather information in open http ports
-	if [ -e temp ]
-	then 
-		printf "\n----- WEB -----\n\n" > results/nmap
-		cat temp >> results/nmap
-		rm temp
-	fi
-	
-	#running nsloockup
-	echo "Running Nslookup..."
-	printf "\n----- Nslookup -----\n\n" > results/nslookup
-	nslookup $TARGET_IP >> results/nslookup
-	
-	cat results/nmap
-	cat results/nslookup
-
-#scaning vulnerabilities
-elif [ $1 == "-v" ]; then
-	
-	TARGET_IP="$2"
-	
-	echo "Running Nmap..."
-	printf "\n----- VULNERBBILITY -----\n\n" > results/vnmap
-	sudo nmap -sV -p21-100 --script vulners $TARGET_IP | tail -n +6 | head -n -4 >> results/vnmap
-	
-	cat results/vnmap
-
-#send files to target IP
-elif [ $1 == "-f" ]; then
-
-	TARGET_IP="$2"
-
-	SOURCE_DIR="$3"
-	DEST_DIR="$4"
-
-	# Use scp to transfer files
-	scp -r "$SOURCE_DIR"/* "$TARGET_IP":"$DEST_DIR"
-
-	# Check the exit status of scp
-	if [ $? -eq 0 ]; then
-		echo "File transfer successful"
-	else
-		echo "File transfer failed"
-	fi
-	
-#send packets to the target IP
-elif [ $1 == "-p" ]; then
-	
-	TARGET_IP="$2"
-	NUM_PACETS="$3"
-	
-	# Use ping to send packets
-	ping -c "$NUM_PACETS" "$TARGET_IP" 
-
-
-	if [ $? -eq 0 ]; then
-		echo "Packets sent successfully"
-	else
-		echo "Failed to send packets"
-	fi
-	
-
-
+# Validate input
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <domain>"
+    exit 1
 fi
 
+DOMAIN=$1
 
+# Create a directory to store results
+mkdir -p recon_results
+cd recon_results
 
+# Domain and Subdomain Enumeration
+echo "[*] Starting subdomain enumeration for $DOMAIN"
+amass enum -passive -d $DOMAIN -o amass_passive.txt
+sublist3r -d $DOMAIN -o sublist3r.txt
+subfinder -d $DOMAIN -o subfinder.txt
+cat amass_passive.txt sublist3r.txt subfinder.txt | sort -u > all_subdomains.txt
+echo "[*] Subdomain enumeration completed. Results saved to all_subdomains.txt"
+
+# WHOIS Information Gathering
+echo "[*] Gathering WHOIS information for $DOMAIN"
+whois $DOMAIN > whois_info.txt
+echo "[*] WHOIS information saved to whois_info.txt"
+
+# Checking for Live Subdomains
+echo "[*] Checking for live subdomains using httx"
+httx -l all_subdomains.txt -o live_subdomains.txt
+echo "[*] Live subdomains check completed. Results saved to live_subdomains.txt"
+
+#  Port Scanning
+echo "[*] Starting port scanning"
+while IFS= read -r subdomain; do
+    echo "[*] Scanning subdomain with Masscan"
+    masscan -p1-65535 $subdomain --rate=1000 -oG masscan_output_$subdomain.txt
+    echo "[*] Scanning subdomain with Naabu"
+    naabu -host $subdomain -o naabu_output_$subdomain.txt
+done < live_subdomains.txt
+echo "[*] Port scanning completed. Results saved to masscan_output_*.txt and naabu_output_*.txt"
+
+#  Service Enumeration
+echo "[*] Starting service enumeration"
+while IFS= read -r subdomain; do
+    echo "[*] Enumerating services on $subdomain"
+    whatweb $subdomain > whatweb_$subdomain.txt
+    wappalyzer $subdomain -o wappalyzer_$subdomain.json
+done < live_subdomains.txt
+echo "[*] Service enumeration completed. Results saved to whatweb_*.txt and wappalyzer_*.json"
+
+#  Vulnerability Scanning
+echo "[*] Starting vulnerability scanning"
+while IFS= read -r subdomain; do
+    echo "[*] Scanning subdomain with Nikto"
+    nikto -h $subdomain -o nikto_$subdomain.txt
+    echo "[*] Scanning subdomain with Nuclei"
+    nuclei -u $subdomain -o nuclei_$subdomain.txt
+done < live_subdomains.txt
+echo "[*] Vulnerability scanning completed. Results saved to nikto_*.txt, zap_report_*.html, and nuclei_*.txt"
+
+#  Taking Screenshots of Live Domains
+echo "[*] Taking screenshots of live domains"
+eyewitness --web -f live_subdomains.txt --no-prompt --results eyewitness_results
+echo "[*] Screenshots taken and saved in the eyewitness_results directory"
+
+# Completion
+echo "[*] Recon workflow completed. All results are saved in the recon_results directory."
